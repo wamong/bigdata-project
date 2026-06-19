@@ -332,7 +332,7 @@ sleep_ko = [VAL_KO["sleep_hours"][v]           for v in SLEEP_ORDER_EN if v in d
 att_ko   = [VAL_KO["attendance_percentage"][v] for v in ATT_ORDER_EN   if v in df_raw["attendance_percentage"].values]
 sat_ko   = [VAL_KO["academic_satisfaction"][v] for v in SAT_ORDER_EN   if v in df_raw["academic_satisfaction"].values]
 
-tab1, tab2, tab3, tab4 = st.tabs(["📋 데이터 개요", "🔍 EDA", "⚙️ 전처리", "🧪 심화 분석"])
+tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs(["📋 데이터 개요", "🔍 EDA", "⚙️ 전처리", "🧪 심화 분석", "🎛️ 필터 분석", "📊 발표 슬라이드"])
 
 
 # ══════════════════════════════════════════════════════════════════
@@ -1220,3 +1220,645 @@ with tab4:
             "• 안정 클래스(15%)의 심각한 불균형으로 단순 정확도(Accuracy)는 신뢰할 수 없습니다.\n"
             "• 추후 종단 연구(Longitudinal Study)나 개입 실험(Intervention Study)으로 검증이 필요합니다."
         )
+
+
+# ══════════════════════════════════════════════════════════════════
+# TAB 5 — 필터 분석
+# ══════════════════════════════════════════════════════════════════
+with tab5:
+    st.subheader("🎛️ 인터랙티브 필터 분석")
+    st.caption("슬라이더·다중 선택으로 부분집합을 설정하면 상관관계와 분포가 실시간 갱신됩니다.")
+
+    # ── 전체 번역 df (필터 적용용) ────────────────────────────────
+    _df_t_full = tdf(df_raw, list(VAL_KO.keys()))
+
+    # ── 수치형 실제 범위 ─────────────────────────────────────────
+    NUM_FILTER_COLS = ["stress_level", "energy_level", "daily_productivity", "routine_rating", "age"]
+    num_ranges = {
+        c: (int(df_raw[c].min()), int(df_raw[c].max()))
+        for c in NUM_FILTER_COLS if c in df_raw.columns
+    }
+
+    # ── 범주형 선택 옵션 (실제 데이터에 존재하는 값만) ────────────
+    def cat_opts(col, order_ko=None):
+        vals = _df_t_full[col].dropna().unique().tolist()
+        if order_ko:
+            return [v for v in order_ko if v in vals]
+        return sorted(vals)
+
+    # ── 레이아웃: 필터 패널 | 결과 영역 ─────────────────────────
+    f_col, r_col = st.columns([1, 2.8], gap="large")
+
+    with f_col:
+        st.markdown("### 필터 설정")
+
+        st.markdown("**수치형 범위**")
+        s_stress   = st.slider("스트레스 레벨",    *num_ranges.get("stress_level",   (1,10)), (num_ranges.get("stress_level",   (1,10))[0], num_ranges.get("stress_level",   (1,10))[1]))
+        s_energy   = st.slider("에너지 레벨",      *num_ranges.get("energy_level",   (1,10)), (num_ranges.get("energy_level",   (1,10))[0], num_ranges.get("energy_level",   (1,10))[1]))
+        s_prod     = st.slider("일일 생산성",      *num_ranges.get("daily_productivity",(1,10)), (num_ranges.get("daily_productivity",(1,10))[0], num_ranges.get("daily_productivity",(1,10))[1]))
+        s_routine  = st.slider("루틴 평가",        *num_ranges.get("routine_rating", (1,10)), (num_ranges.get("routine_rating", (1,10))[0], num_ranges.get("routine_rating", (1,10))[1]))
+        age_lo, age_hi = num_ranges.get("age", (18, 30))
+        s_age      = st.slider("나이",             age_lo, age_hi, (age_lo, age_hi))
+
+        st.markdown("**범주형 선택**")
+        sel_risk   = st.multiselect("학업 관리 단계",  cat_opts("performance_risk_level", risk_ko),  default=cat_opts("performance_risk_level", risk_ko))
+        sel_study  = st.multiselect("일일 공부 시간",  cat_opts("study_hours_daily",  study_ko),  default=cat_opts("study_hours_daily",  study_ko))
+        sel_att    = st.multiselect("출석률",          cat_opts("attendance_percentage", att_ko),  default=cat_opts("attendance_percentage", att_ko))
+        sel_sleep  = st.multiselect("수면 시간",       cat_opts("sleep_hours", sleep_ko),          default=cat_opts("sleep_hours", sleep_ko))
+        sel_gender = st.multiselect("성별",            cat_opts("gender"),                          default=cat_opts("gender"))
+
+        st.markdown("---")
+        if st.button("🔄 필터 초기화", use_container_width=True):
+            st.rerun()
+
+    # ── 필터 적용 ─────────────────────────────────────────────────
+    mask5 = pd.Series(True, index=df_raw.index)
+
+    for col, rng in [("stress_level", s_stress), ("energy_level", s_energy),
+                     ("daily_productivity", s_prod), ("routine_rating", s_routine),
+                     ("age", s_age)]:
+        if col in df_raw.columns:
+            notna = df_raw[col].notna()
+            mask5 &= (~notna) | df_raw[col].between(*rng)
+
+    for col, sel in [("performance_risk_level", sel_risk), ("study_hours_daily", sel_study),
+                     ("attendance_percentage", sel_att), ("sleep_hours", sel_sleep),
+                     ("gender", sel_gender)]:
+        if col in _df_t_full.columns and sel:
+            mask5 &= _df_t_full[col].isin(sel)
+
+    df5     = df_raw[mask5].copy()
+    df5_t   = _df_t_full[mask5].copy()
+    n_raw   = len(df_raw)
+    n_filt  = len(df5)
+
+    with r_col:
+        # ── 요약 지표 ──────────────────────────────────────────
+        m1, m2, m3, m4 = st.columns(4)
+        m1.metric("전체 학생", n_raw)
+        m2.metric("필터 후 학생", n_filt, delta=f"{n_filt - n_raw:+d}")
+        if n_filt > 0:
+            risk_pct = df5_t["performance_risk_level"].value_counts(normalize=True) * 100
+            m3.metric("관리 필요", f"{risk_pct.get('관리 필요', 0):.1f}%")
+            m4.metric("안정",     f"{risk_pct.get('안정', 0):.1f}%")
+        else:
+            m3.metric("관리 필요", "—")
+            m4.metric("안정", "—")
+
+        st.divider()
+
+        if n_filt == 0:
+            st.warning("조건에 맞는 학생이 없습니다. 필터를 조정해 주세요.")
+        else:
+            chart5 = st.radio(
+                "표시할 분석",
+                ["학업 관리 단계 분포", "수치형 상관관계 히트맵",
+                 "스트레스 × 에너지 산점도", "변수별 평균 비교"],
+                horizontal=True,
+            )
+            st.divider()
+
+            # ── 학업 관리 단계 분포 ───────────────────────────
+            if chart5 == "학업 관리 단계 분포":
+                risk_cnt_filt  = df5_t["performance_risk_level"].value_counts().reindex(risk_ko, fill_value=0)
+                risk_cnt_total = _df_t_full["performance_risk_level"].value_counts().reindex(risk_ko, fill_value=0)
+
+                fig, axes = plt.subplots(1, 2, figsize=(12, 5))
+                # 필터 후 파이
+                axes[0].pie(
+                    risk_cnt_filt.values,
+                    labels=risk_cnt_filt.index,
+                    autopct="%1.1f%%",
+                    colors=[RISK_COLOR_KO[r] for r in risk_ko],
+                    startangle=140,
+                    wedgeprops={"edgecolor": "white", "linewidth": 1.5},
+                    textprops={"fontsize": 11},
+                )
+                axes[0].set_title(f"필터 후 분포 (n={n_filt})", fontweight="bold")
+
+                # 전체 vs 필터 비율 막대 비교
+                df_cmp = pd.DataFrame({
+                    "전체": (risk_cnt_total / risk_cnt_total.sum() * 100),
+                    "필터 후": (risk_cnt_filt / risk_cnt_filt.sum() * 100) if risk_cnt_filt.sum() > 0 else risk_cnt_filt * 0,
+                })
+                df_cmp.plot(kind="bar", ax=axes[1],
+                            color=["#90CAF9", "#F48FB1"], edgecolor="white", width=0.6)
+                axes[1].set_title("전체 vs 필터 후 비율 비교", fontweight="bold")
+                axes[1].set_xlabel("학업 관리 단계")
+                axes[1].set_ylabel("비율 (%)")
+                axes[1].tick_params(axis="x", rotation=15)
+                axes[1].legend()
+                plt.tight_layout()
+                fig2st(fig)
+
+            # ── 수치형 상관관계 히트맵 ────────────────────────
+            elif chart5 == "수치형 상관관계 히트맵":
+                num_cols5 = df5.select_dtypes("number").columns.tolist()
+                if len(num_cols5) >= 2:
+                    corr5 = df5[num_cols5].corr()
+                    corrA = df_raw[num_cols5].corr()  # 전체 상관계수 (비교용)
+                    corr5.columns = [ko(c) for c in corr5.columns]
+                    corr5.index   = [ko(c) for c in corr5.index]
+                    mask_tri = np.triu(np.ones_like(corr5, dtype=bool))
+
+                    fig, axes = plt.subplots(1, 2, figsize=(14, 5))
+                    for ax, corr_data, title in [
+                        (axes[0], corr5, f"필터 후 상관관계 (n={n_filt})"),
+                        (axes[1], corrA.rename(columns=ko, index=ko), f"전체 상관관계 (n={n_raw})"),
+                    ]:
+                        corrA_indexed = corr_data.rename(columns=lambda c: COL_KO.get(c, c),
+                                                          index=lambda c: COL_KO.get(c, c))
+                        sns.heatmap(corr_data, mask=mask_tri, annot=True, fmt=".2f",
+                                    cmap="coolwarm", center=0, vmin=-1, vmax=1,
+                                    linewidths=0.5, annot_kws={"size": 9}, ax=ax)
+                        ax.set_title(title, fontweight="bold")
+                    plt.tight_layout()
+                    fig2st(fig)
+
+                    # 상관계수 변화량 표
+                    corrA2 = df_raw[df5.select_dtypes("number").columns].corr()
+                    diff = (corr5.values - np.tril(corrA2.rename(columns=ko, index=ko).reindex(index=corr5.index, columns=corr5.columns).values))
+                    st.caption("▶ 필터 전후 수치형 상관계수 상위 변화 쌍")
+                    pairs5 = (corr5.where(~mask_tri).stack().reset_index()
+                              .rename(columns={"level_0": "변수1", "level_1": "변수2", 0: "필터후 상관계수"}))
+                    pairs5["전체 상관계수"] = (corrA.rename(columns=ko, index=ko)
+                                                .reindex(index=corr5.index, columns=corr5.columns)
+                                                .where(~mask_tri).stack().values)
+                    pairs5["변화량"] = (pairs5["필터후 상관계수"] - pairs5["전체 상관계수"]).round(3)
+                    pairs5 = pairs5.assign(abs변화=pairs5["변화량"].abs()).sort_values("abs변화", ascending=False).drop("abs변화", axis=1).head(6).reset_index(drop=True)
+                    pairs5["필터후 상관계수"] = pairs5["필터후 상관계수"].round(3)
+                    pairs5["전체 상관계수"]   = pairs5["전체 상관계수"].round(3)
+                    st.dataframe(pairs5, use_container_width=True)
+                else:
+                    st.info("수치형 컬럼이 2개 이상 필요합니다.")
+
+            # ── 스트레스 × 에너지 산점도 ─────────────────────
+            elif chart5 == "스트레스 × 에너지 산점도":
+                fig, axes = plt.subplots(1, 2, figsize=(14, 5))
+                for ax, dft, label, n in [
+                    (axes[0], df5_t,        f"필터 후 (n={n_filt})", n_filt),
+                    (axes[1], _df_t_full,   f"전체 (n={n_raw})",     n_raw),
+                ]:
+                    for risk in risk_ko:
+                        g = dft[dft["performance_risk_level"] == risk]
+                        ax.scatter(
+                            df_raw.loc[g.index, "stress_level"],
+                            df_raw.loc[g.index, "energy_level"],
+                            c=RISK_COLOR_KO[risk], label=risk,
+                            alpha=0.5, s=28, edgecolors="white", linewidths=0.3,
+                        )
+                    ax.set_title(f"스트레스 × 에너지 — {label}", fontweight="bold")
+                    ax.set_xlabel("스트레스 레벨")
+                    ax.set_ylabel("에너지 레벨")
+                    ax.legend(title="학업 관리 단계", fontsize=8)
+                plt.tight_layout()
+                fig2st(fig)
+
+            # ── 변수별 평균 비교 ──────────────────────────────
+            else:
+                NUM5 = ["stress_level", "energy_level", "daily_productivity", "routine_rating"]
+                num5_exist = [c for c in NUM5 if c in df5.columns and c in df_raw.columns]
+                mean_filt  = df5[num5_exist].mean()
+                mean_total = df_raw[num5_exist].mean()
+                mean_df    = pd.DataFrame({
+                    "전체 평균":   mean_total,
+                    "필터 후 평균": mean_filt,
+                })
+                mean_df.index = [ko(c) for c in mean_df.index]
+
+                fig, ax = plt.subplots(figsize=(10, 5))
+                x = np.arange(len(mean_df))
+                w = 0.35
+                bars1 = ax.bar(x - w/2, mean_df["전체 평균"],   w, label="전체",   color="#90CAF9", edgecolor="white")
+                bars2 = ax.bar(x + w/2, mean_df["필터 후 평균"], w, label="필터 후", color="#F48FB1", edgecolor="white")
+                for b in list(bars1) + list(bars2):
+                    ax.text(b.get_x() + b.get_width()/2, b.get_height() + 0.03,
+                            f"{b.get_height():.2f}", ha="center", fontsize=8, fontweight="bold")
+                ax.set_title(f"수치형 변수 평균 — 전체 vs 필터 후 (n={n_filt})", fontweight="bold")
+                ax.set_xticks(x)
+                ax.set_xticklabels(mean_df.index, rotation=10)
+                ax.set_ylabel("평균값")
+                ax.legend()
+                ax.set_ylim(0, max(mean_df.max().max() * 1.25, 1))
+                plt.tight_layout()
+                fig2st(fig)
+
+                # 수치 표
+                mean_df["변화량"] = (mean_df["필터 후 평균"] - mean_df["전체 평균"]).round(2)
+                mean_df["변화(%)"] = ((mean_df["필터 후 평균"] - mean_df["전체 평균"]) / mean_df["전체 평균"] * 100).round(1).astype(str) + "%"
+                st.dataframe(mean_df.round(3), use_container_width=True)
+
+            # ── 필터된 원시 데이터 보기 ───────────────────────
+            st.divider()
+            with st.expander(f"📄 필터된 원시 데이터 보기 ({n_filt}행)", expanded=False):
+                show_cols = ["performance_risk_level", "cgpa_category",
+                             "stress_level", "energy_level", "daily_productivity",
+                             "study_hours_daily", "attendance_percentage", "sleep_hours", "gender"]
+                show_cols = [c for c in show_cols if c in df5.columns]
+                st.dataframe(
+                    tdf(df5, show_cols).rename(columns=COL_KO).head(200),
+                    use_container_width=True,
+                )
+                if n_filt <= 1000:
+                    csv5 = tdf(df5, list(VAL_KO.keys())).rename(columns=COL_KO)\
+                               .to_csv(index=False, encoding="utf-8-sig").encode("utf-8-sig")
+                    st.download_button("⬇ 필터 데이터 CSV 다운로드", csv5,
+                                       "filtered_students.csv", "text/csv")
+
+
+# ══════════════════════════════════════════════════════════════════
+# TAB 6 — 발표 슬라이드
+# ══════════════════════════════════════════════════════════════════
+with tab6:
+    import base64 as _b64, io as _bio
+
+
+    # ── base64 헬퍼 ─────────────────────────────────────────────
+    def _b64img(fig, dpi=130):
+        buf = _bio.BytesIO()
+        fig.savefig(buf, format="png", dpi=dpi, bbox_inches="tight", facecolor="white")
+        buf.seek(0)
+        return "data:image/png;base64," + _b64.b64encode(buf.read()).decode()
+
+    # ── 슬라이드 3용 차트 A: 파이차트 ─────────────────────────
+    _ds = tdf(df_raw, ["performance_risk_level"])
+    _rc = _ds["performance_risk_level"].value_counts().reindex(risk_ko, fill_value=0)
+    fA, aA = plt.subplots(figsize=(4.8, 3.8), facecolor="white")
+    aA.pie(_rc.values, labels=_rc.index, autopct="%1.1f%%",
+           colors=[RISK_COLOR_KO[r] for r in risk_ko], startangle=140,
+           wedgeprops={"edgecolor": "white", "linewidth": 1.5},
+           textprops={"fontsize": 12})
+    aA.set_title("학업 관리 단계 분포  (n=1,200)", fontsize=12, fontweight="bold")
+    plt.tight_layout()
+    imgA = _b64img(fA)
+    plt.close(fA)
+
+    # ── 슬라이드 3용 차트 B: 공부 일관성 × 관리 필요 비율 ──────
+    _CONS_EN = ["Rarely", "Sometimes", "Mostly consistent"]
+    _cons_ko = [VAL_KO["study_consistency"][v] for v in _CONS_EN
+                if v in df_raw["study_consistency"].dropna().unique()]
+    _dcs = tdf(df_raw, ["study_consistency", "performance_risk_level"])
+    _crt = (pd.crosstab(_dcs["study_consistency"], _dcs["performance_risk_level"])
+            .reindex(_cons_ko, fill_value=0).reindex(columns=risk_ko, fill_value=0))
+    _hp  = (_crt["관리 필요"] / _crt.sum(axis=1) * 100).reindex(_cons_ko)
+    fB, aB = plt.subplots(figsize=(4.8, 3.8), facecolor="white")
+    _brs = aB.bar(_hp.index, _hp.values,
+                  color=["#EF5350", "#FF8A65", "#66BB6A"][:len(_hp)],
+                  edgecolor="white", width=0.5)
+    for b in _brs:
+        aB.text(b.get_x()+b.get_width()/2, b.get_height()+0.8,
+                f"{b.get_height():.0f}%", ha="center", fontsize=13, fontweight="bold")
+    aB.set_title("공부 일관성 → 관리 필요 비율", fontsize=12, fontweight="bold")
+    aB.set_xlabel("공부 일관성", fontsize=10); aB.set_ylabel("관리 필요 비율 (%)", fontsize=10)
+    aB.set_ylim(0, 90)
+    plt.tight_layout()
+    imgB = _b64img(fB)
+    plt.close(fB)
+
+    # ── 슬라이드 5용 차트 C: SDL 박스플롯 ─────────────────────
+    _SDL_M = {
+        "study_consistency":   {"Rarely": 0, "Sometimes": 1, "Mostly consistent": 2},
+        "revision_frequency":  {"Never": 0, "Rarely": 1, "Few times a week": 2, "Daily": 3},
+        "tasks_on_time":       {"Rarely": 0, "Sometimes": 1, "Often": 2, "Always": 3},
+        "assignments_on_time": {"Rarely": 0, "Sometimes": 1, "Often": 2, "Always": 3},
+    }
+    _ds2 = df_raw.copy()
+    for _c, _m in _SDL_M.items():
+        if _c in _ds2.columns:
+            _ds2[_c+"_e"] = _ds2[_c].map(_m)
+    _ds2["SDL"] = _ds2[[_c+"_e" for _c in _SDL_M if _c in df_raw.columns]].sum(axis=1)
+    _ds2t = tdf(_ds2, ["performance_risk_level"])
+    fC, aC = plt.subplots(figsize=(5, 3.8), facecolor="white")
+    sns.boxplot(data=_ds2t, x="performance_risk_level", y="SDL",
+                order=risk_ko, palette=RISK_COLOR_KO, ax=aC, width=0.45)
+    aC.set_title("학업 관리 단계별 SDL 지수", fontsize=12, fontweight="bold")
+    aC.set_xlabel("학업 관리 단계", fontsize=10); aC.set_ylabel("SDL 지수 (0~11)", fontsize=10)
+    plt.tight_layout()
+    imgC = _b64img(fC)
+    plt.close(fC)
+
+    # ── CSS ─────────────────────────────────────────────────────
+    st.markdown("""
+<style>
+.deck { font-family: 'Malgun Gothic', 'Apple SD Gothic Neo', sans-serif; color: #212121 !important; }
+
+.slide {
+    background: #ffffff;
+    border: 1px solid #dde3ea;
+    border-radius: 12px;
+    box-shadow: 0 4px 16px rgba(0,0,0,.10);
+    padding: 48px 64px;
+    margin: 0 0 36px 0;
+    min-height: 490px;
+    box-sizing: border-box;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    position: relative;
+    overflow: hidden;
+}
+.slide::before {
+    content: '';
+    position: absolute; top: 0; left: 0;
+    width: 6px; height: 100%;
+    background: #1565C0;
+}
+
+.snum {
+    position: absolute; top: 14px; right: 22px;
+    font-size: 11px; color: #78909c !important; letter-spacing: 1px;
+}
+.stitle {
+    font-size: 2.0rem; font-weight: 700;
+    color: #1a237e; margin: 0 0 10px 0; line-height: 1.25;
+}
+.ssub  { font-size: 1.05rem; color: #37474f !important; margin: 0 0 20px 0; }
+.slabel {
+    font-size: 0.78rem; font-weight: 700; color: #1565C0;
+    text-transform: uppercase; letter-spacing: 1.2px; margin: 0 0 6px 0;
+}
+
+.two-col { display: flex; gap: 28px; align-items: flex-start; }
+.two-col > div { flex: 1; }
+
+.kpi-row { display: flex; gap: 20px; margin: 20px 0; }
+.kpi {
+    flex: 1; background: #E3F2FD; border-radius: 8px;
+    padding: 14px 20px; text-align: center;
+}
+.kpi-num { font-size: 2.4rem; font-weight: 700; color: #1565C0; line-height: 1; }
+.kpi-lbl { font-size: 0.82rem; color: #546e7a; margin-top: 4px; }
+
+.tag {
+    display: inline-block; border-radius: 20px;
+    padding: 3px 13px; font-size: 0.85rem; font-weight: 600; margin: 3px;
+}
+.tg  { background: #E3F2FD; color: #1565C0; }
+.tgr { background: #FFEBEE; color: #C62828; }
+.tgy { background: #FFF8E1; color: #E65100; }
+.tgg { background: #E8F5E9; color: #2E7D32; }
+
+.insight {
+    background: #FFF8E1;
+    border-left: 4px solid #FFC107;
+    padding: 10px 18px; border-radius: 0 6px 6px 0;
+    font-size: 1.0rem; font-weight: 600; margin-top: 16px;
+}
+
+.demo-box {
+    text-align: center;
+    padding: 28px;
+    background: linear-gradient(135deg, #1a237e 0%, #1976D2 100%);
+    border-radius: 12px; color: white; margin: 12px 0;
+}
+.demo-main { font-size: 2.8rem; font-weight: 700; }
+.demo-url  { font-size: 1.1rem; opacity: .80; margin-top: 6px; letter-spacing: .5px; }
+
+.steps { list-style: none; padding: 0; margin: 18px 0 0 0; }
+.steps li {
+    display: flex; align-items: center; gap: 12px;
+    padding: 7px 0; font-size: 0.95rem; color: #212121 !important;
+    border-bottom: 1px solid #dde3ea;
+}
+.snum-badge {
+    background: #1565C0; color: white; border-radius: 50%;
+    width: 26px; height: 26px; display: flex;
+    align-items: center; justify-content: center;
+    font-size: 0.82rem; font-weight: 700; flex-shrink: 0;
+}
+
+.formula {
+    background: #F3F8FF; border: 1px solid #BBDEFB;
+    border-radius: 8px; padding: 16px 22px;
+    font-size: 0.95rem; font-weight: 500; color: #1a237e;
+    margin: 14px 0; line-height: 1.7;
+}
+
+.concl-row { display: flex; gap: 18px; margin-top: 22px; }
+.ccard {
+    flex: 1; padding: 18px 20px; border-radius: 8px; border-top: 4px solid;
+}
+.ccard h4 { margin: 0 0 7px 0; font-size: 0.82rem; text-transform: uppercase; letter-spacing: .6px; }
+.ccard p  { margin: 0; font-size: 0.92rem; color: #212121 !important; line-height: 1.5; }
+.ccard.cg { border-color: #4CAF50; background: #F1F8E9; }
+.ccard.cg h4 { color: #2E7D32; }
+.ccard.co { border-color: #FF9800; background: #FFF3E0; }
+.ccard.co h4 { color: #E65100; }
+.ccard.cb { border-color: #2196F3; background: #E3F2FD; }
+.ccard.cb h4 { color: #1565C0; }
+
+.title-slide { background: linear-gradient(135deg, #E8EAF6 0%, #FFFFFF 100%); }
+.title-slide::before { background: #283593; }
+
+/* ── 인쇄 ── */
+@media print {
+    @page { size: A4 landscape; margin: 0; }
+
+    [data-testid="stHeader"],
+    [data-testid="stToolbar"],
+    [data-testid="stDecoration"],
+    [data-testid="stStatusWidget"],
+    [data-baseweb="tab-list"],
+    [data-testid="stSidebar"],
+    .stAlert, footer, header { display: none !important; }
+
+    .deck { display: block !important; }
+
+    .slide {
+        page-break-after: always;
+        page-break-inside: avoid;
+        box-shadow: none !important;
+        border: none !important;
+        border-radius: 0 !important;
+        margin: 0 !important;
+        padding: 36px 60px !important;
+        min-height: 0 !important;
+        width: 100% !important;
+    }
+    .slide:last-child { page-break-after: avoid; }
+}
+</style>
+""", unsafe_allow_html=True)
+
+    # ── 슬라이드 HTML ────────────────────────────────────────────
+    st.markdown(f"""
+<div class="deck">
+
+<!-- ★ SLIDE 1: 제목 -->
+<div class="slide title-slide">
+  <span class="snum">01 / 06</span>
+  <div style="margin-bottom:8px">
+    <span class="tag tg">빅데이터 프로젝트</span>
+    <span class="tag tg">2026-06-19</span>
+  </div>
+  <div class="stitle">학생 성취도 분석 대시보드</div>
+  <div class="ssub">행동 데이터로 학습 지원 필요 학생을 조기 식별하는 인터랙티브 앱</div>
+  <div style="margin-top:32px; font-size:1.1rem; color:#263238 !important;">
+    <strong>정명진</strong> &nbsp;/&nbsp; 20242530
+  </div>
+</div>
+
+<!-- ★ SLIDE 2: 문제 정의 & 데이터 -->
+<div class="slide">
+  <span class="snum">02 / 06</span>
+  <div class="slabel">Problem &amp; Data</div>
+  <div class="stitle">무엇을, 왜 분석하는가</div>
+  <div class="two-col" style="margin-top:20px;">
+    <div>
+      <p style="font-size:1.05rem; color:#212121 !important; line-height:1.7; margin:0 0 16px 0;">
+        학업 성취도는 공부 시간만이 아니라<br>
+        수면·스트레스·습관 등 복합 요인이 결정한다.
+      </p>
+      <div style="margin-bottom:8px"><span class="slabel">예측 타겟</span></div>
+      <span class="tag tgg">안정</span>
+      <span class="tag tgy">주의 관찰</span>
+      <span class="tag tgr">관리 필요</span>
+      <span class="tag tg" style="margin-top:8px; display:inline-block;">CGPA 구간 (4단계)</span>
+    </div>
+    <div>
+      <div class="kpi-row">
+        <div class="kpi">
+          <div class="kpi-num">1,200</div>
+          <div class="kpi-lbl">학생 수 (행)</div>
+        </div>
+        <div class="kpi">
+          <div class="kpi-num">36</div>
+          <div class="kpi-lbl">변수 수 (열)</div>
+        </div>
+      </div>
+      <div class="kpi-row">
+        <div class="kpi">
+          <div class="kpi-num">13</div>
+          <div class="kpi-lbl">결측 컬럼</div>
+        </div>
+        <div class="kpi">
+          <div class="kpi-num">~80</div>
+          <div class="kpi-lbl">전처리 후 열</div>
+        </div>
+      </div>
+      <div style="font-size:0.82rem; color:#546e7a !important; margin-top:4px; text-align:right;">
+        Kaggle · CC0 Public Domain
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ★ SLIDE 3: EDA 핵심 발견 -->
+<div class="slide">
+  <span class="snum">03 / 06</span>
+  <div class="slabel">EDA Findings</div>
+  <div class="stitle">데이터가 말해준 것</div>
+  <div class="two-col" style="margin-top:16px; align-items:center;">
+    <div style="text-align:center;">
+      <img src="{imgA}" style="max-width:100%; height:auto;" />
+    </div>
+    <div style="text-align:center;">
+      <img src="{imgB}" style="max-width:100%; height:auto;" />
+    </div>
+  </div>
+  <div class="insight">
+    💡 공부 <strong>시간</strong>보다 공부 <strong>꾸준함</strong>이 훨씬 강한 예측 변수
+    &nbsp;—&nbsp; '거의 안 함' 그룹의 <strong>74%</strong>가 관리 필요 단계
+  </div>
+</div>
+
+<!-- ★ SLIDE 4: DEMO -->
+<div class="slide">
+  <span class="snum">04 / 06</span>
+  <div class="slabel">Live Demo</div>
+  <div class="demo-box">
+    <div class="demo-main">🚀 LIVE DEMO</div>
+    <div class="demo-url">http://localhost:8501</div>
+  </div>
+  <ul class="steps">
+    <li><span class="snum-badge">1</span>📋 데이터 개요 — 1,200행·36열 요약 확인</li>
+    <li><span class="snum-badge">2</span>🔍 EDA → 타겟 분포 → 공부시간×CGPA 히트맵</li>
+    <li><span class="snum-badge">3</span>⚙️ 전처리 → ▶ 실행 → 결과 확인 + CSV 다운로드</li>
+    <li><span class="snum-badge">4</span>🧪 심화 분석 → SDL 지수 → 위험도별 박스플롯</li>
+    <li><span class="snum-badge">5</span>🎛️ 필터 분석 → 스트레스 슬라이더 조정 → 상관관계 변화 확인</li>
+  </ul>
+</div>
+
+<!-- ★ SLIDE 5: 특성 & 분석 결과 -->
+<div class="slide">
+  <span class="snum">05 / 06</span>
+  <div class="slabel">Feature Engineering &amp; Results</div>
+  <div class="stitle">새로 만든 특성 &amp; 핵심 수치</div>
+  <div class="two-col" style="margin-top:16px; align-items:center;">
+    <div>
+      <div class="slabel" style="margin-bottom:8px;">SDL 자기주도 학습 지수</div>
+      <div class="formula">
+        SDL = 공부일관성 (0~2)<br>
+        &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;+ 복습빈도 (0~3)<br>
+        &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;+ 과제제때제출 (0~3)<br>
+        &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;+ 과제제출 (0~3)<br>
+        <strong style="font-size:1.05rem;">합계 최대 11점</strong>
+      </div>
+      <table style="width:100%; border-collapse:collapse; font-size:0.9rem; margin-top:12px;">
+        <tr style="background:#E3F2FD;">
+          <th style="padding:6px 10px; text-align:left; border-radius:4px 0 0 0;">발견</th>
+          <th style="padding:6px 10px; text-align:right; border-radius:0 4px 0 0;">수치</th>
+        </tr>
+        <tr style="border-bottom:1px solid #f0f0f0;">
+          <td style="padding:6px 10px; color:#212121;">공부 일관성 최저 → 관리 필요</td>
+          <td style="padding:6px 10px; text-align:right; font-weight:700; color:#C62828;">74%</td>
+        </tr>
+        <tr style="border-bottom:1px solid #f0f0f0;">
+          <td style="padding:6px 10px; color:#212121;">학업 만족도 최저 → 관리 필요</td>
+          <td style="padding:6px 10px; text-align:right; font-weight:700; color:#C62828;">65%</td>
+        </tr>
+        <tr style="border-bottom:1px solid #f0f0f0;">
+          <td style="padding:6px 10px; color:#212121;">스크린타임 6h+ 생산성 저하</td>
+          <td style="padding:6px 10px; text-align:right; font-weight:700; color:#E65100;">−16%</td>
+        </tr>
+        <tr>
+          <td style="padding:6px 10px; color:#212121;">안정 그룹 비율 (클래스 불균형)</td>
+          <td style="padding:6px 10px; text-align:right; font-weight:700; color:#1565C0;">15%</td>
+        </tr>
+      </table>
+    </div>
+    <div style="text-align:center;">
+      <img src="{imgC}" style="max-width:100%; height:auto;" />
+    </div>
+  </div>
+</div>
+
+<!-- ★ SLIDE 6: 결론 & 한계 -->
+<div class="slide">
+  <span class="snum">06 / 06</span>
+  <div class="slabel">Conclusion</div>
+  <div class="stitle">결론 &amp; 한계</div>
+  <div class="insight" style="margin-top:16px;">
+    공부 <strong>꾸준함(일관성)</strong>과 <strong>SDL 자기주도 지수</strong>가
+    단순 공부 시간보다 학업 관리 단계를 훨씬 잘 설명한다
+  </div>
+  <div class="concl-row">
+    <div class="ccard cg">
+      <h4>✅ 알게 된 것</h4>
+      <p>
+        꾸준함 &gt; 시간<br>
+        스트레스 高 + 에너지 低 = 번아웃<br>
+        외부 압박 없음 → 오히려 관리 필요 ↑
+      </p>
+    </div>
+    <div class="ccard co">
+      <h4>⚠️ 한계</h4>
+      <p>
+        안정 15% 클래스 불균형<br>
+        자기보고 편향 가능성<br>
+        인과관계 아닌 상관관계만 확인
+      </p>
+    </div>
+    <div class="ccard cb">
+      <h4>🔭 향후 과제</h4>
+      <p>
+        Random Forest + SMOTE 모델<br>
+        SHAP 변수 중요도 시각화<br>
+        LLM 맞춤형 학습 상담 리포트
+      </p>
+    </div>
+  </div>
+</div>
+
+</div><!-- /deck -->
+""", unsafe_allow_html=True)
